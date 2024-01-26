@@ -45,7 +45,25 @@ describe('JSON node', function() {
                 msg.payload.employees[0].should.have.property('lastName', 'Smith');
                 done();
             });
-            var jsonString = '{"employees":[{"firstName":"John", "lastName":"Smith"}]}';
+            var jsonString = ' {"employees":[{"firstName":"John", "lastName":"Smith"}]}\r\n ';
+            jn1.receive({payload:jsonString,topic: "bar"});
+        });
+    });
+
+    it('should convert a buffer of a valid json string to a javascript object', function(done) {
+        var flow = [{id:"jn1",type:"json",action:"obj",wires:[["jn2"]]},
+                    {id:"jn2", type:"helper"}];
+        helper.load(jsonNode, flow, function() {
+            var jn1 = helper.getNode("jn1");
+            var jn2 = helper.getNode("jn2");
+            jn2.on("input", function(msg) {
+                msg.should.have.property('topic', 'bar');
+                msg.payload.should.have.property('employees');
+                msg.payload.employees[0].should.have.property('firstName', 'John');
+                msg.payload.employees[0].should.have.property('lastName', 'Smith');
+                done();
+            });
+            var jsonString = Buffer.from(' {"employees":[{"firstName":"John", "lastName":"Smith"}]}\r\n ');
             jn1.receive({payload:jsonString,topic: "bar"});
         });
     });
@@ -148,42 +166,72 @@ describe('JSON node', function() {
                 var jn1 = helper.getNode("jn1");
                 var jn2 = helper.getNode("jn2");
                 jn1.receive({payload:'foo',topic: "bar"});
-                var logEvents = helper.log().args.filter(function(evt) {
-                    return evt[0].type == "json";
-                });
-                logEvents.should.have.length(1);
-                logEvents[0][0].should.have.a.property('msg');
-                logEvents[0][0].msg.should.startWith("Unexpected token o");
-                logEvents[0][0].should.have.a.property('level',helper.log().ERROR);
-                done();
+                setTimeout(function() {
+                    try {
+                        var logEvents = helper.log().args.filter(function(evt) {
+                            return evt[0].type == "json";
+                        });
+                        logEvents.should.have.length(1);
+                        logEvents[0][0].should.have.a.property('msg');
+                        logEvents[0][0].msg.should.match(/^Unexpected token (o|'o')/);
+                        logEvents[0][0].should.have.a.property('level',helper.log().ERROR);
+                        done();
+                    } catch(err) { done(err) }
+                },20);
             } catch(err) {
                 done(err);
             }
         });
     });
 
-    it('should log an error if asked to parse something thats not json or js', function(done) {
-        var flow = [{id:"jn1",type:"json",wires:[["jn2"]]},
+    it('should log an error if asked to parse an invalid json string in a buffer', function(done) {
+        var flow = [{id:"jn1",type:"json",action:"obj",wires:[["jn2"]]},
                     {id:"jn2", type:"helper"}];
         helper.load(jsonNode, flow, function() {
-            var jn1 = helper.getNode("jn1");
-            var jn2 = helper.getNode("jn2");
-            setTimeout(function() {
-                try {
-                    var logEvents = helper.log().args.filter(function(evt) {
-                        return evt[0].type == "json";
-                    });
-                    logEvents.should.have.length(1);
-                    logEvents[0][0].should.have.a.property('msg');
-                    logEvents[0][0].msg.toString().should.eql('json.errors.dropped-object');
-                    done();
-                } catch(err) {
-                    done(err);
-                }
-            },50);
-            jn1.receive({payload:Buffer.from("a")});
+            try {
+                var jn1 = helper.getNode("jn1");
+                var jn2 = helper.getNode("jn2");
+                jn1.receive({payload:Buffer.from('{"name":foo}'),topic: "bar"});
+                setTimeout(function() {
+                    try {
+                        var logEvents = helper.log().args.filter(function(evt) {
+                            return evt[0].type == "json";
+                        });
+                        logEvents.should.have.length(1);
+                        logEvents[0][0].should.have.a.property('msg');
+                        logEvents[0][0].msg.should.match(/^Unexpected token (o|'o')/);
+                        logEvents[0][0].should.have.a.property('level',helper.log().ERROR);
+                        done();
+                    } catch(err) { done(err) }
+                },20);
+            } catch(err) {
+                done(err);
+            }
         });
     });
+
+    // it('should log an error if asked to parse something thats not json or js and not in force object mode', function(done) {
+    //     var flow = [{id:"jn1",type:"json",wires:[["jn2"]]},
+    //                 {id:"jn2", type:"helper"}];
+    //     helper.load(jsonNode, flow, function() {
+    //         var jn1 = helper.getNode("jn1");
+    //         var jn2 = helper.getNode("jn2");
+    //         setTimeout(function() {
+    //             try {
+    //                 var logEvents = helper.log().args.filter(function(evt) {
+    //                     return evt[0].type == "json";
+    //                 });
+    //                 logEvents.should.have.length(1);
+    //                 logEvents[0][0].should.have.a.property('msg');
+    //                 logEvents[0][0].msg.toString().should.eql('json.errors.dropped');
+    //                 done();
+    //             } catch(err) {
+    //                 done(err);
+    //             }
+    //         },50);
+    //         jn1.receive({payload:Buffer.from("abcd")});
+    //     });
+    // });
 
     it('should pass straight through if no payload set', function(done) {
         var flow = [{id:"jn1",type:"json",wires:[["jn2"]]},
@@ -378,14 +426,18 @@ describe('JSON node', function() {
                 var schema = {title: "testSchema", type: "object", properties: {number: {type: "number"}, string: {type: "string" }}};
                 var obj =  {"number": "foo", "string": 3};
                 jn1.receive({payload:obj, schema:schema});
-                var logEvents = helper.log().args.filter(function(evt) {
-                    return evt[0].type == "json";
-                });
-                logEvents.should.have.length(1);
-                logEvents[0][0].should.have.a.property('msg');
-                logEvents[0][0].msg.should.equal("json.errors.schema-error: data.number should be number, data.string should be string");
-                logEvents[0][0].should.have.a.property('level',helper.log().ERROR);
-                done();
+                setTimeout(function() {
+                    try {
+                        var logEvents = helper.log().args.filter(function(evt) {
+                            return evt[0].type == "json";
+                        });
+                        logEvents.should.have.length(1);
+                        logEvents[0][0].should.have.a.property('msg');
+                        logEvents[0][0].msg.should.startWith("json.errors.schema-error");
+                        logEvents[0][0].should.have.a.property('level',helper.log().ERROR);
+                        done();
+                    } catch(err) { done(err) }
+                },50);
             } catch(err) {
                 done(err);
             }
@@ -402,14 +454,18 @@ describe('JSON node', function() {
                 var schema = {title: "testSchema", type: "object", properties: {number: {type: "number"}, string: {type: "string" }}};
                 var obj =  {"number": "foo", "string": 3};
                 jn1.receive({payload:obj, schema:schema});
-                var logEvents = helper.log().args.filter(function(evt) {
-                    return evt[0].type == "json";
-                });
-                logEvents.should.have.length(1);
-                logEvents[0][0].should.have.a.property('msg');
-                logEvents[0][0].msg.should.equal("json.errors.schema-error: data.number should be number, data.string should be string");
-                logEvents[0][0].should.have.a.property('level',helper.log().ERROR);
-                done();
+                setTimeout(function() {
+                    try {
+                        var logEvents = helper.log().args.filter(function(evt) {
+                            return evt[0].type == "json";
+                        });
+                        logEvents.should.have.length(1);
+                        logEvents[0][0].should.have.a.property('msg');
+                        logEvents[0][0].msg.should.startWith("json.errors.schema-error");
+                        logEvents[0][0].should.have.a.property('level',helper.log().ERROR);
+                        done();
+                    } catch(err) { done(err) }
+                },50);
             } catch(err) {
                 done(err);
             }
@@ -426,14 +482,18 @@ describe('JSON node', function() {
                 var schema = {title: "testSchema", type: "object", properties: {number: {type: "number"}, string: {type: "string" }}};
                 var jsonString =  '{"number":"Hello","string":3}';
                 jn1.receive({payload:jsonString, schema:schema});
-                var logEvents = helper.log().args.filter(function(evt) {
-                    return evt[0].type == "json";
-                });
-                logEvents.should.have.length(1);
-                logEvents[0][0].should.have.a.property('msg');
-                logEvents[0][0].msg.should.equal("json.errors.schema-error: data.number should be number, data.string should be string");
-                logEvents[0][0].should.have.a.property('level',helper.log().ERROR);
-                done();
+                setTimeout(function() {
+                    try {
+                        var logEvents = helper.log().args.filter(function(evt) {
+                            return evt[0].type == "json";
+                        });
+                        logEvents.should.have.length(1);
+                        logEvents[0][0].should.have.a.property('msg');
+                        logEvents[0][0].msg.should.startWith("json.errors.schema-error");
+                        logEvents[0][0].should.have.a.property('level',helper.log().ERROR);
+                        done();
+                    } catch(err) { done(err) }
+                },50);
             } catch(err) {
                 done(err);
             }
@@ -450,14 +510,18 @@ describe('JSON node', function() {
                 var schema = {title: "testSchema", type: "object", properties: {number: {type: "number"}, string: {type: "string" }}};
                 var jsonString =  '{"number":"Hello","string":3}';
                 jn1.receive({payload:jsonString, schema:schema});
-                var logEvents = helper.log().args.filter(function(evt) {
-                    return evt[0].type == "json";
-                });
-                logEvents.should.have.length(1);
-                logEvents[0][0].should.have.a.property('msg');
-                logEvents[0][0].msg.should.equal("json.errors.schema-error: data.number should be number, data.string should be string");
-                logEvents[0][0].should.have.a.property('level',helper.log().ERROR);
-                done();
+                setTimeout(function() {
+                    try {
+                        var logEvents = helper.log().args.filter(function(evt) {
+                            return evt[0].type == "json";
+                        });
+                        logEvents.should.have.length(1);
+                        logEvents[0][0].should.have.a.property('msg');
+                        logEvents[0][0].msg.should.startWith("json.errors.schema-error");
+                        logEvents[0][0].should.have.a.property('level',helper.log().ERROR);
+                        done();
+                    } catch(err) { done(err) }
+                },50);
             } catch(err) {
                 done(err);
             }
@@ -474,14 +538,18 @@ describe('JSON node', function() {
                 var schema = "garbage";
                 var obj =  {"number": "foo", "string": 3};
                 jn1.receive({payload:obj, schema:schema});
-                var logEvents = helper.log().args.filter(function(evt) {
-                    return evt[0].type == "json";
-                });
-                logEvents.should.have.length(1);
-                logEvents[0][0].should.have.a.property('msg');
-                logEvents[0][0].msg.should.equal("json.errors.schema-error-compile");
-                logEvents[0][0].should.have.a.property('level',helper.log().ERROR);
-                done();
+                setTimeout(function() {
+                    try {
+                        var logEvents = helper.log().args.filter(function(evt) {
+                            return evt[0].type == "json";
+                        });
+                        logEvents.should.have.length(1);
+                        logEvents[0][0].should.have.a.property('msg');
+                        logEvents[0][0].msg.should.equal("json.errors.schema-error-compile");
+                        logEvents[0][0].should.have.a.property('level',helper.log().ERROR);
+                        done();
+                    } catch(err) { done(err) }
+                },50);
             } catch(err) {
                 done(err);
             }

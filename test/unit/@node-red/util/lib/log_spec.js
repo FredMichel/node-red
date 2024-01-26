@@ -24,7 +24,7 @@ var log = NR_TEST_UTILS.require("@node-red/util").log;
 
 describe("@node-red/util/log", function() {
     beforeEach(function () {
-        var spy = sinon.stub(util, 'log', function(arg){});
+        var spy = sinon.stub(util, 'log').callsFake(function(arg){});
         var settings = {logging: { console: { level: 'metric', metrics: true } } };
         log.init(settings);
     });
@@ -224,5 +224,29 @@ describe("@node-red/util/log", function() {
 
 
     });
+    it('it can log without exception', function() {
+        var msg = {
+            msg: {
+              mystrangeobj:"hello",
+            },
+        };
+        msg.msg.toString = function(){
+          throw new Error('Exception in toString - should have been caught');
+        }
+        msg.msg.constructor = { name: "strangeobj" };
+        var ret = log.info(msg.msg);
+    });
+    it('it can log an object but use .message', function() {
+        var msg = {
+            msg: {
+              message: "my special message",
+              mystrangeobj:"hello",
+            },
+        };
+        var ret = log.info(msg.msg);
+        sinon.assert.calledWithMatch(util.log,"my special message");
+    });
 
+    
+    
 });

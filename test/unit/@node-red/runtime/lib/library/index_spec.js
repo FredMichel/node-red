@@ -14,12 +14,14 @@
  * limitations under the License.
  **/
 
-var should = require("should");
-var sinon = require("sinon");
-var fs = require("fs");
+const should = require("should");
+const sinon = require("sinon");
 
-var NR_TEST_UTILS = require("nr-test-utils");
-var library = NR_TEST_UTILS.require("@node-red/runtime/lib/library/index")
+const NR_TEST_UTILS = require("nr-test-utils");
+const library = NR_TEST_UTILS.require("@node-red/runtime/lib/library/index")
+const localLibrary = NR_TEST_UTILS.require("@node-red/runtime/lib/library/local")
+const examplesLibrary = NR_TEST_UTILS.require("@node-red/runtime/lib/library/examples")
+const events = NR_TEST_UTILS.require("@node-red/util/lib/events")
 
 var mockLog = {
     log: sinon.stub(),
@@ -34,6 +36,36 @@ var mockLog = {
 
 
 describe("runtime/library", function() {
+    before(function() {
+        sinon.stub(localLibrary,"getEntry").callsFake(function(type,path) {
+            return Promise.resolve({
+                library: "local",
+                type:type,
+                path:path
+            })
+        });
+        sinon.stub(localLibrary,"saveEntry").callsFake(function(type, path, meta, body) {
+            return Promise.resolve({
+                library: "local",
+                type:type,
+                path:path,
+                meta:meta,
+                body:body
+            })
+        });
+        sinon.stub(examplesLibrary,"getEntry").callsFake(function(type,path) {
+            return Promise.resolve({
+                library: "_examples_",
+                type:type,
+                path:path
+            })
+        });
+    });
+    after(function() {
+        localLibrary.getEntry.restore();
+        localLibrary.saveEntry.restore();
+        examplesLibrary.getEntry.restore();
+    })
     describe("register", function() {
         // it("throws error for duplicate type", function() {
         //     library.init({});
@@ -41,49 +73,74 @@ describe("runtime/library", function() {
         //     should(()=>{library.register("unknown","/abc")} ).throw();
         // })
     })
-    describe("getEntry", function() {
+
+    describe("getLibraries", function() {
         before(function() {
+            library.init({});
+        });
+        it('returns the default and examples libraries', function() {
+            const libs = library.getLibraries();
+            libs.should.have.length(2);
+            libs[0].should.have.property('id', 'local');
+            libs[0].should.have.property('label','editor:library.types.local');
+            libs[0].should.have.property("user", false);
+            libs[0].should.have.property('icon', 'font-awesome/fa-hdd-o');
+
+            libs[1].should.have.property('id', 'examples');
+            libs[1].should.have.property('label','editor:library.types.examples');
+            libs[1].should.have.property("user", false);
+            libs[1].should.have.property('icon', 'font-awesome/fa-life-ring');
+            libs[1].should.have.property('readOnly', true);
+            libs[1].should.have.property('types', ['flows']);
+        });
+
+        it('returns the libraries from settings', function() {
             library.init({
-                log: mockLog,
-                storage: {
-                    getLibraryEntry: function(type,path) {
-                        return Promise.resolve({type,path});
-                    },
-                    getFlow: function(path) {
-                        return Promise.resolve({path});
+                plugins: {
+                    getPlugin: id => { return {
+                            id: "test-library-plugin",
+                            type: "node-red-library-source",
+                            class: function() {}
+                        }
                     }
                 },
-                nodes: {
-                    getNodeExampleFlowPath: function(module,entryPath) {
-                        if (module === "unknown") {
-                            return null;
+                settings: {
+                    editorTheme: {
+                        library: {
+                            sources: [
+                                {id: "test-plugin-id", type:"test-library-plugin"}
+                            ]
                         }
-                        return "/tmp/"+module+"/"+entryPath;
                     }
                 }
             });
-            sinon.stub(fs,"readFile", function(path,opts,callback) {
-                if (path === "/tmp/test-module/abc") {
-                    callback(null,"Example flow result");
-                } else if (path === "/tmp/@scope/test-module/abc") {
-                    callback(null,"Example scope flow result");
-                } else if (path === "/tmp/test-module/throw") {
-                    throw new Error("Instant error")
-                } else {
-                    callback(new Error("Unexpected path:"+path))
-                }
-            })
+            let libs = library.getLibraries();
+            libs.should.have.length(2);
+
+            events.emit("registry:plugin-added","test-library-plugin" )
+
+            libs = library.getLibraries();
+            libs.should.have.length(3);
+            libs[2].should.have.property('id', 'test-plugin-id');
+            libs[2].should.have.property("user", false);
         });
-        after(function() {
-            fs.readFile.restore();
-        })
+    })
+
+    describe("getEntry", function() {
+        before(function() {
+            library.init({});
+        });
         it('throws error for unregistered type', function() {
-            should(()=>{library.getEntry("unknown","/abc")} ).throw();
+            should(()=>{library.getEntry("local","unknown","/abc")} ).throw();
+        });
+        it('throws error for unknown library', function() {
+            should(()=>{library.getEntry("unknown","unknown","/abc")} ).throw();
         });
 
         it('returns a registered non-flow entry', function(done) {
             library.register("test-module","test-type");
-            library.getEntry("test-type","/abc").then(function(result) {
+            library.getEntry("local","test-type","/abc").then(function(result) {
+                result.should.have.property("library","local")
                 result.should.have.property("type","test-type")
                 result.should.have.property("path","/abc")
                 done();
@@ -91,76 +148,37 @@ describe("runtime/library", function() {
         });
 
         it ('returns a flow entry', function(done) {
-            library.getEntry("flows","/abc").then(function(result) {
+            library.getEntry("local","flows","/abc").then(function(result) {
+                result.should.have.property("library","local")
                 result.should.have.property("path","/abc")
                 done();
             }).catch(done);
         });
 
         it ('returns a flow example entry', function(done) {
-            library.getEntry("flows","_examples_/test-module/abc").then(function(result) {
-                result.should.eql("Example flow result");
+            library.getEntry("examples","flows","/test-module/abc").then(function(result) {
+                result.should.have.property("library","_examples_")
+                result.should.have.property("path","/test-module/abc")
                 done();
             }).catch(done);
-        });
-
-        it ('returns a flow example entry from scoped module', function(done) {
-            library.getEntry("flows","_examples_/@scope/test-module/abc").then(function(result) {
-                result.should.eql("Example scope flow result");
-                done();
-            }).catch(done);
-        });
-        it ('returns an error for unknown flow example entry', function(done) {
-            library.getEntry("flows","_examples_/unknown/abc").then(function(result) {
-                done(new Error("No error thrown"))
-            }).catch(function(err) {
-                err.should.have.property("code","not_found");
-                done();
-            });
-        });
-        it ('returns an error for file load error - async', function(done) {
-            library.getEntry("flows","_examples_/test-module/unknown").then(function(result) {
-                done(new Error("No error thrown"))
-            }).catch(function(err) {
-                done();
-            });
-        });
-        it ('returns an error for file load error - sync', function(done) {
-            library.getEntry("flows","_examples_/test-module/throw").then(function(result) {
-                done(new Error("No error thrown"))
-            }).catch(function(err) {
-                done();
-            });
         });
     });
 
     describe("saveEntry", function() {
         before(function() {
-            library.init({
-                log: mockLog,
-                storage: {
-                    saveLibraryEntry: function(type, path, meta, body) {
-                        return Promise.resolve({type,path,meta,body})
-                    },
-                    saveFlow: function(path,body) {
-                        return Promise.resolve({path,body});
-                    }
-                },
-                nodes: {
-                    getNodeExampleFlowPath: function(module,entryPath) {
-                        if (module === "unknown") {
-                            return null;
-                        }
-                        return "/tmp/"+module+"/"+entryPath;
-                    }
-                }
-            });
+            library.init({});
+        });
+        it('throws error for unknown library', function() {
+            should(()=>{library.saveEntry("unknown","unknown","/abc",{id:"meta"},{id:"body"})} ).throw();
         });
         it('throws error for unregistered type', function() {
-            should(()=>{library.saveEntry("unknown","/abc",{id:"meta"},{id:"body"})} ).throw();
+            should(()=>{library.saveEntry("local","unknown","/abc",{id:"meta"},{id:"body"})} ).throw();
+        });
+        it('throws error for save to readonly library', function() {
+            should(()=>{library.saveEntry("_examples_","unknown","/abc",{id:"meta"},{id:"body"})} ).throw();
         });
         it('saves a flow entry', function(done) {
-            library.saveEntry('flows','/abc',{id:"meta"},{id:"body"}).then(function(result) {
+            library.saveEntry('local','flows','/abc',{id:"meta"},{id:"body"}).then(function(result) {
                 result.should.have.property("path","/abc");
                 result.should.have.property("body",{id:"body"});
                 done();
@@ -168,7 +186,7 @@ describe("runtime/library", function() {
         })
         it('saves a non-flow entry', function(done) {
             library.register("test-module","test-type");
-            library.saveEntry('test-type','/abc',{id:"meta"},{id:"body"}).then(function(result) {
+            library.saveEntry('local','test-type','/abc',{id:"meta"},{id:"body"}).then(function(result) {
                 result.should.have.property("type","test-type");
                 result.should.have.property("path","/abc");
                 result.should.have.property("meta",{id:"meta"});
