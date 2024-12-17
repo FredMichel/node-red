@@ -25,6 +25,7 @@ var NR_TEST_UTILS = require("nr-test-utils");
 var installer = NR_TEST_UTILS.require("@node-red/registry/lib/installer");
 var registry = NR_TEST_UTILS.require("@node-red/registry/lib/index");
 var typeRegistry = NR_TEST_UTILS.require("@node-red/registry/lib/registry");
+let pluginRegistry = NR_TEST_UTILS.require("@node-red/registry/lib/plugins");
 const { events, exec, log, hooks } =  NR_TEST_UTILS.require("@node-red/util");
 
 describe('nodes/registry/installer', function() {
@@ -65,6 +66,9 @@ describe('nodes/registry/installer', function() {
         }
         if (typeRegistry.setModulePendingUpdated.restore) {
             typeRegistry.setModulePendingUpdated.restore();
+        }
+        if (pluginRegistry.removeModule.restore) {
+            pluginRegistry.removeModule.restore();
         }
         if (fs.statSync.restore) {
             fs.statSync.restore();
@@ -249,6 +253,29 @@ describe('nodes/registry/installer', function() {
             });
 
             installer.installModule("this_wont_exist",null,"https://example/foo-0.1.1.tgz").then(function(info) {
+                info.should.eql(nodeInfo);
+                done();
+            }).catch(done);
+        });
+
+        it("succeeds when file path is valid node-red module", function(done) {
+            var nodeInfo = {nodes:{module:"foo",types:["a"]}};
+
+            var res = {
+                code: 0,
+                stdout:"",
+                stderr:""
+            }
+            var p = Promise.resolve(res);
+            p.catch((err)=>{});
+            execResponse = p;
+
+            var addModule = sinon.stub(registry,"addModule").callsFake(function(md) {
+                return Promise.resolve(nodeInfo);
+            });
+
+            installer.installModule("foo",null,"/example path/foo-0.1.1.tgz").then(function(info) {
+                exec.run.lastCall.args[1].should.eql([ 'install', '--no-audit', '--no-update-notifier', '--no-fund', '--save', '--save-prefix=~', '--omit=dev', '--engine-strict', '"/example path/foo-0.1.1.tgz"' ]);
                 info.should.eql(nodeInfo);
                 done();
             }).catch(done);
@@ -501,6 +528,9 @@ describe('nodes/registry/installer', function() {
             var nodeInfo = [{module:"foo",types:["a"]}];
             var removeModule = sinon.stub(typeRegistry,"removeModule").callsFake(function(md) {
                 return nodeInfo;
+            });
+            let removePluginModule = sinon.stub(pluginRegistry,"removeModule").callsFake(function(md) {
+                return [];
             });
             var getModuleInfo = sinon.stub(registry,"getModuleInfo").callsFake(function(md) {
                 return {nodes:[]};
